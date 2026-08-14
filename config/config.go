@@ -86,7 +86,13 @@ type Server struct {
 	MaxBatchBodySize int64                  `yaml:"max_batch_body_size"      mapstructure:"max_batch_body_size"`
 	OAuth            map[string]*OAuthEntry `yaml:"oauth"                    mapstructure:"oauth"`
 	OAuthOnly        bool                   `yaml:"oauth_only"               mapstructure:"oauth_only"`
+	// MaxSearchLimit caps the hits a single search may request. Zero disables
+	// the cap.
+	MaxSearchLimit int `yaml:"max_search_limit" mapstructure:"max_search_limit"`
 }
+
+// DefaultMaxSearchLimit bounds a single search request's result count.
+const DefaultMaxSearchLimit = 1000
 
 func (s Server) MaxBatchBodyBytes() int64 {
 	return s.MaxBatchBodySize << 20
@@ -502,6 +508,7 @@ func CreateDefaultConfig() *Config {
 			BaseURL:          DefaultServerBaseURL,
 			Database:         "db.sqlite3",
 			MaxBatchBodySize: DefaultMaxBatchBodySize,
+			MaxSearchLimit:   DefaultMaxSearchLimit,
 		},
 		Indexer: Indexer{
 			DetectLanguages: true,

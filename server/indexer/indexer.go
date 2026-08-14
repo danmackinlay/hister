@@ -67,6 +67,7 @@ type Indexer struct {
 	keepStopwords     bool
 	directories       []*config.Directory
 	maxFileSize       int64
+	maxSearchLimit    int
 	sensitivePattern  *regexp.Regexp
 	semanticConfig    config.SemanticSearch
 }
@@ -337,6 +338,7 @@ func New(cfg *config.Config) (*Indexer, error) {
 	idx.disablePreviews = cfg.App.DisablePreviews
 	idx.directories = cfg.Indexer.Directories
 	idx.maxFileSize = defaultMaxFileSize
+	idx.maxSearchLimit = cfg.Server.MaxSearchLimit
 	idx.sensitivePattern = sensitivePattern
 	idx.semanticConfig = cfg.SemanticSearch
 	if cfg.Indexer.MaxFileSize > 0 {
@@ -769,6 +771,7 @@ func (idx *Indexer) reindex(basePath string, rules *config.Rules, skipSensitiveC
 		return err
 	}
 	replacement.maxFileSize = idx.maxFileSize
+	replacement.maxSearchLimit = idx.maxSearchLimit
 	replacement.sensitivePattern = idx.sensitivePattern
 	replacement.semanticConfig = idx.semanticConfig
 	idx.adopt(replacement)
@@ -1369,6 +1372,7 @@ func (i *Indexer) adopt(replacement *Indexer) {
 	i.keepStopwords = replacement.keepStopwords
 	i.directories = replacement.directories
 	i.maxFileSize = replacement.maxFileSize
+	i.maxSearchLimit = replacement.maxSearchLimit
 	i.sensitivePattern = replacement.sensitivePattern
 	i.semanticConfig = replacement.semanticConfig
 }
@@ -1558,8 +1562,9 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 	if expression.HasSort {
 		q.Sort = expression.Sort
 	}
+	include := q.resultInclude()
 	req := bleve.NewSearchRequest(q.create(expression.Text))
-	req.Fields = allFields
+	req.Fields = searchFields(include)
 
 	if q.FacetsOnly {
 		req.Size = 0
@@ -1568,6 +1573,12 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 		req.Size = q.Limit
 	} else {
 		req.Size = 100
+	}
+	// Query.Limit comes straight from client supplied JSON, so clamp it here
+	// rather than at any one endpoint: this is the chokepoint every caller
+	// reaches, and the index alias fans req.Size out to every language index.
+	if i.maxSearchLimit > 0 && req.Size > i.maxSearchLimit {
+		req.Size = i.maxSearchLimit
 	}
 
 	switch q.Highlight {
@@ -1600,13 +1611,6 @@ func (i *Indexer) search(semanticConfig config.SemanticSearch, q *Query) (*Resul
 	res, err := i.searchIndexes(req)
 	if err != nil {
 		return nil, err
-	}
-	include := resultInclude(0)
-	if q.IncludeText {
-		include |= resultIncludeText
-	}
-	if q.IncludeHTML {
-		include |= resultIncludeHTML
 	}
 	matches := make([]*document.Document, len(res.Hits))
 	for j, v := range res.Hits {
@@ -1820,6 +1824,49 @@ const (
 
 func (include resultInclude) has(flag resultInclude) bool {
 	return include&flag != 0
+}
+
+func (q *Query) resultInclude() resultInclude {
+	include := resultInclude(0)
+	if q.IncludeText {
+		include |= resultIncludeText
+	}
+	if q.IncludeHTML {
+		include |= resultIncludeHTML
+	}
+	return include
+}
+
+// baseSearchFields are the stored fields resFromHit always reads. Requesting
+// them by name rather than with "*" keeps bleve from materializing the full
+// stored text of every hit into hit.Fields, where it would be retained for the
+// lifetime of the search result. Bleve loads the stored document either way, so
+// this bounds what is retained, not what is decompressed.
+//
+// Note that bleve matches field names exactly and has no prefix wildcard, so a
+// narrowed request cannot carry metadata.* fields. Nothing on the search path
+// reads them; the per-document lookups that do (preview and MCP preview) go
+// through getByDocID, which still requests allFields.
+var baseSearchFields = []string{
+	"url", "title", "domain", "added", "updated", "type", "user_id",
+	"language", "label", "add_count", "html_key", "favicon_key", "favicon",
+}
+
+// searchFields returns the stored fields to request for a search, adding the
+// large ones only when the caller actually consumes them.
+func searchFields(include resultInclude) []string {
+	if !include.has(resultIncludeText) && !include.has(resultIncludeHTML) {
+		return baseSearchFields
+	}
+	fields := make([]string, 0, len(baseSearchFields)+2)
+	fields = append(fields, baseSearchFields...)
+	if include.has(resultIncludeText) {
+		fields = append(fields, "text")
+	}
+	if include.has(resultIncludeHTML) {
+		fields = append(fields, "html")
+	}
+	return fields
 }
 
 func (idx *Indexer) resFromHit(h *search.DocumentMatch, include resultInclude) *document.Document {
