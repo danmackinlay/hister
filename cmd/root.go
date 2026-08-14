@@ -398,8 +398,24 @@ func initialize() {
 		UserAgent = cfg.Crawler.UserAgent
 	}
 	initLog()
+	initMemoryLimit()
 	log.Debug().Str("filename", cfg.Filename()).Msg("Config initialization complete")
 	log.Debug().Msg("Logging initialization complete")
+}
+
+// initMemoryLimit applies app.memory_limit_mb as a soft heap limit. The garbage
+// collector works harder as the heap approaches it rather than aborting, so it
+// bounds the heap goal without risking an out of memory kill.
+func initMemoryLimit() {
+	if cfg.App.MemoryLimitMB <= 0 {
+		return
+	}
+	if os.Getenv("GOMEMLIMIT") != "" {
+		log.Debug().Msg("GOMEMLIMIT is set, ignoring app.memory_limit_mb")
+		return
+	}
+	debug.SetMemoryLimit(cfg.App.MemoryLimitMB << 20)
+	log.Debug().Int64("MB", cfg.App.MemoryLimitMB).Msg("Soft memory limit set")
 }
 
 func initConfig() {

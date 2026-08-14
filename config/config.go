@@ -63,6 +63,9 @@ type App struct {
 	RedirectOnNoResults    bool   `yaml:"redirect_on_no_results" mapstructure:"redirect_on_no_results"`
 	DisplayExtractorConfig bool   `yaml:"display_extractor_config" mapstructure:"display_extractor_config"`
 	DisablePreviews        bool   `yaml:"disable_previews" mapstructure:"disable_previews"`
+	// MemoryLimitMB sets a soft limit on the Go heap. Zero leaves the runtime
+	// unconstrained. GOMEMLIMIT takes precedence when set.
+	MemoryLimitMB int64 `yaml:"memory_limit_mb" mapstructure:"memory_limit_mb"`
 }
 
 type TUI struct {
